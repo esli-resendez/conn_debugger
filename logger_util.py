@@ -1,9 +1,9 @@
 from datetime import datetime
 
 class Logger:
-    def __init__(self, task_id):
+    def __init__(self, task_id, node_pos=4):
         timestamp = datetime.now().strftime("%y%m%d%H%M%S")
-        self.filename = f"ssh_conn_task{task_id}_{timestamp}.log"
+        self.filename = f"ssh_task_{task_id}_node_{node_pos}_{timestamp}.log"
         self.file = open(self.filename, "a", encoding="utf-8")
 
     def log(self, command, output):
