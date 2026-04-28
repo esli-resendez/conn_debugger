@@ -24,15 +24,32 @@ TASK_2 = [
     "ipmitool raw 0x32 0x91 0x01 0x5F" # high speed
 ]
 
-# =========================
-# LOGGER
-# =========================
+SENSOR_CMD = "ipmitool sdr"
+FAN_MANUAL = "ipmitool raw 0x32 0x90 0x01"
+FAN_AUTO = "ipmitool raw 0x32 0x90 0x00"
+FAN_LOW_SPEED = "ipmitool raw 0x32 0x91 0x01 0x10"
+FAN_HIGH_SPEED = "ipmitool raw 0x32 0x91 0x01 0x5F"
 
 
-# =========================
-# SSH CLIENT CLASS
-# =========================
+def print_w_ts(text):
+    print(f"{datetime.now().strftime("%y/%m/%d %H:%M:%S")}\t{text}")
+    return
 
+def pull_journal_log(node:SSHClientWrapper, node_pos):
+
+    journal_log = Logger("journal_log", node_pos)
+    journal_txt = node.query("journalctl -b 0 --output=short-iso-precise --no-pager", 300, False)
+    journal_log.log("journalctl", journal_txt)
+    journal_log.close()
+
+    return
+
+
+def adjust_node_time(node:SSHClientWrapper):
+    print_w_ts('adjusting hostOS time')
+    r = node.query(f'date -s "{datetime.now().strftime("%y/%m/%d %H:%M:%S")}"')
+    r = node.query('hwclock --systohc')
+    return
 
 def wait_for_ssh(host="127.0.0.1", port=22, timeout=300, interval=2, logger=None):
     """
@@ -63,27 +80,39 @@ TMP_REGEX = re.compile(
     re.IGNORECASE
 )
 
-def power_cycle_node_wait(node:SSHClientWrapper, rm:SSHClientWrapper, logger:Logger, node_pos, node_port, ac_reboot:bool):
+def power_cycle_node_wait(node:SSHClientWrapper, rm:SSHClientWrapper, logger:Logger, node_pos, node_port, ac_reboot:bool) -> SSHClientWrapper:
 
     if ac_reboot:
-        PWR_OFF = f"set manager port off -i {node_pos}"
-        PWR_ON = f"set manager port on -i {node_pos}"
+        pwr_off = f"set manager port off -i {node_pos}"
+        pwr_on = f"set manager port on -i {node_pos}"
+        d_time = 400
     else:
-        PWR_OFF = f"set system off -i {node_pos}"
-        PWR_ON = f"set system on -i {node_pos}"
+        pwr_off = f"set system off -i {node_pos}"
+        pwr_on = f"set system on -i {node_pos}"
+        d_time = 300
 
     # Commands to send to RM
     node.close()
-    r = rm.query()
-    print(f"Sending System off node: {node_pos}:\n{r}")
+    system_rdy = False
+    ready_count = 0
+    
+    print_w_ts(f"Powering off node: {node_pos}:")
+    if ac_reboot:
+        print_w_ts("Using AC Cycle via RM")
+    r = rm.query(pwr_off)
+    print(r)
     time.sleep(10)
-    r = rm.query(f"set system on -i {node_pos}")
-    print(f"Send system on to node {node_pos}:\n{r}")
-    print(f"Wait 300s for node {node_pos} to come back on")
-    time.sleep(300)
+    print_w_ts(f"Send system on to node {node_pos}:")
+    r = rm.query(pwr_on)
+    print_w_ts(f"Wait plain {d_time}s for node {node_pos} to come back on")
+    time.sleep(d_time)
     print(f"Wait done, checking SSH")
-    wait_for_ssh(port=node_port, logger=logger)
-    node.connect()
+    for _ in range(3):
+        if (wait_for_ssh(port=node_port, timeout=300, logger=logger)):
+            node = SSHClientWrapper(port=node_port, logger=logger)
+            node.connect()
+            return node
+
     return
 
 
@@ -117,6 +146,49 @@ def execute_task(commands, logger, port, delay):
         client.close()
         logger.close()
 
+
+def check_for_events(logger, node_port, node_pos, delay):
+    rm = SSHClientWrapper(port=40050, password="$pl3nd1D", logger=logger)
+    node = SSHClientWrapper(port=node_port, logger=logger)
+    count = 0
+    rm.connect()
+    node.connect()
+    SENSOR_CMD = "ipmitool sdr"
+    print_w_ts("Setting fans to high speed")
+    output = node.query(FAN_MANUAL)
+    output = node.query(FAN_HIGH_SPEED)
+    # put system into current time
+    adjust_node_time(node) 
+    # Main task waiting forever
+    print_w_ts("Fan ctrl done. Start the collection of data")
+    try:
+        while True:
+            output = node.query(SENSOR_CMD)
+            uptime = node.query("uptime")
+            if check_no_reading(output):
+                print_w_ts("no reading detected in output")
+                raise KeyboardInterrupt
+                node = power_cycle_node_wait(node, rm, logger, node_pos, node_port, ac_reboot=False)
+                print_w_ts("Cycle done, checking again")
+                uptime = node.query("uptime")
+                print_w_ts(f"Uptime is: {uptime}")
+                print_w_ts("Setting fans to high speed after reboot")
+                output = node.query(FAN_MANUAL)
+                output = node.query(FAN_HIGH_SPEED)
+            else:
+                print_w_ts(f"Output completed, waiting for: {delay}")
+                time.sleep(delay)
+                print_w_ts("Wait done, checking again")
+            
+
+    except KeyboardInterrupt:
+        print_w_ts(f"\n[+] Interrupted Task#6 for node {node_pos}")
+    finally:
+        rm.close()
+        node.close()
+        logger.close()
+
+
 # =========================
 # POWER CYCLE TASK
 # =========================
@@ -142,7 +214,7 @@ def power_cycle_task(logger, node_port, node_pos, ac_reboot):
                 logger.log("ERROR", f"Overtemp Detected at iteration {count}")
             
             count = count+1
-            power_cycle_node_wait(node, rm, logger, node_pos, ac_reboot)
+            node = power_cycle_node_wait(node, rm, logger, node_pos, node_port, ac_reboot)
 
 
     except KeyboardInterrupt:
@@ -172,8 +244,8 @@ def detect_overheat_task(logger, node_port, node_pos, ac_reboot):
             if triggered:
                 print("[!] Overtemperature detected:", triggered)
                 logger.log("ERROR", "Overtemp Detected")
-                # Commands to send to RM
-                power_cycle_node_wait(node, rm, logger, node_pos, ac_reboot)
+                # Commands to send to RM to reboot system
+                power_cycle_node_wait(node, rm, logger, node_pos, node_port, ac_reboot)
 
             time.sleep(2)
 
@@ -201,6 +273,7 @@ def cause_overheat_task(logger, node_port, node_pos):
     SENSOR_CMD = "ipmitool sdr"
 
     # Forcing fans to speed slow:
+    print(f"{datetime.now().strftime("%y/%m/%d %H:%M:%S")}\tSlowing down fans")
     r = node.query("ipmitool raw 0x32 0x90 0x01") # enable manual ctrl
     r = node.query("ipmitool raw 0x32 0x91 0x01 0x10") # low speed")
 
@@ -208,12 +281,83 @@ def cause_overheat_task(logger, node_port, node_pos):
         while True:
             try:
                 output = node.query(SENSOR_CMD)
-                triggered = check_overtemp(output)
+                triggered = check_overtemp(sensor_output=output, threshold=120)
+                no_reading = check_no_reading(output)
+                
+                if no_reading:
+                    print(f"{datetime.now().strftime("%y/%m/%d %H:%M:%S")}\tNo reading was detected, waiting for node to cool down")
+                    time.sleep(60)
+                    continue
+                # system is stable, set fans to low mode
+                r = node.query(FAN_MANUAL) # enable manual ctrl
+                r = node.query(FAN_LOW_SPEED) # low speed")
 
                 if triggered:
                     print("[!] Overtemperature detected:", triggered)
                     logger.log("ERROR", f"Overtemp Detected at sensor {triggered}")
-                print(f"{datetime.now().strftime("%y%m%d%H%M%S")}\tipmitool cmd completed")
+                    # shut down the node now via AC cycle
+                    node = power_cycle_node_wait(node, rm, logger, node_pos, node_port, ac_reboot=True)
+                    print(f"{datetime.now().strftime("%y/%m/%d %H:%M:%S")}\tSystem is back on")
+                print(f"{datetime.now().strftime("%y/%m/%d %H:%M:%S")}\tipmitool cmd completed")
+            # System became unresponsive, power cycle it with a DC reset see how that goes
+            except Exception as e:
+                print(f"Exception created, details:\n{e}")
+                r = rm.query(f"set system off -i {node_pos}")
+                print(f"Trying to set system off node: {node_pos}:\n{r}")
+                time.sleep(10)
+                r = rm.query(f"set system on -i {node_pos}")
+                print(f"Trying to set system on to node {node_pos}:\n{r}")
+                raise e
+
+            time.sleep(2)
+
+    except KeyboardInterrupt:
+        print("\n[+] Interrupted power cycle task")
+    finally:
+        rm.close()
+        node.close()
+        logger.close()
+
+    return
+
+
+def fan_policy_check(logger, node_port, node_pos):
+
+    rm = SSHClientWrapper(port=40050, password="$pl3nd1D", logger=logger)
+    node = SSHClientWrapper(port=node_port, logger=logger)
+    fans_manual = False
+
+    rm.connect()
+    node.connect()
+
+    try:
+        while True:
+            try:
+                print_w_ts("Checking node")
+                output = node.query(SENSOR_CMD)
+                print_w_ts("ipmi command completed, checking overtemp and no reading")
+                triggered = check_overtemp(sensor_output=output, threshold=85)
+                no_reading = check_no_reading(output)
+                if no_reading:
+                    print_w_ts("No reading was detected, waiting for node to cool down")
+                    r = node.query(FAN_AUTO) # enable Auto mode
+                    time.sleep(60)
+                    continue
+                # system is overheating, return to control
+                if triggered:
+                    print_w_ts(f"[!] Overtemperature detected: {triggered}")
+                    logger.log("ERROR", f"Overtemp Detected at sensor {triggered}")
+                    # shut down the node now via AC cycle
+                    if fans_manual:
+                        r = node.query(FAN_AUTO) # low speed")
+                        print_w_ts("fans now back to Auto mode...")
+                        fans_manual = False
+                else:
+                    if not fans_manual:
+                        print_w_ts("No overtemp, setting fans to slow speed")
+                        r = node.query(FAN_MANUAL)
+                        r = node.query(FAN_LOW_SPEED)
+                        fans_manual = True
             # System became unresponsive, power cycle it with a DC reset see how that goes
             except Exception as e:
                 print(f"Exception created, details:\n{e}")
@@ -244,7 +388,7 @@ def cause_overheat_task(logger, node_port, node_pos):
 # =========================
 def main():
     parser = argparse.ArgumentParser(description="SSH Task Runner")
-    parser.add_argument("-t", type=int, choices=[1, 2, 3, 4, 5], required=True, help="Task number")
+    parser.add_argument("-t", type=int, choices=[1, 2, 3, 4, 5, 6, 7], required=True, help="Task number")
     parser.add_argument("-i", type=str, default="127.0.0.1")
     parser.add_argument("-p", type=int, default=40004)
     parser.add_argument("-n", type=str, default="4", help="Node number")
@@ -271,6 +415,10 @@ def main():
         cause_overheat_task(logger, port, node)
     elif task_id == 5:
         power_cycle_task(logger, port, node, ac_cycle)
+    elif task_id == 6:
+        check_for_events(logger, port, node, delay)
+    elif task_id == 7:
+        fan_policy_check(logger, port, node)
 
 if __name__ == "__main__":
     main()

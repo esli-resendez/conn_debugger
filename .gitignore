@@ -1,6 +1,8 @@
 *.log
 *.json
-output/
 output/*.log
+output/*.csv
 __pycache__/
 __pycache__/*
+
+output/plots/*

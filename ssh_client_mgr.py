@@ -46,11 +46,11 @@ class SSHClientWrapper:
         error = stderr.read().decode(errors="ignore")
         return output + error
 
-    def query(self, command, timeout=60):
+    def query(self, command, timeout=60, log_cmd=True):
         try:
             stdin, stdout, stderr = self.client.exec_command(command, timeout=timeout)
             result = self.read(stdout, stderr)
-            if self.logger:
+            if self.logger and log_cmd:
                 self.logger.log(command, result)
             return result
         except Exception as e:
