@@ -380,6 +380,55 @@ def fan_policy_check(logger, node_port, node_pos):
     return
 
 
+def fan_control_algorithm_check(logger, rm_ip, rm_port, node_ip, node_port, node_pos, stress_duration):
+
+    rm = SSHClientWrapper(host=rm_ip, port=rm_port, password="$pl3nd1D", logger=logger)
+    node = SSHClientWrapper(host=node_ip, port=node_port, logger=logger)
+    elapsed = 0
+
+    rm.connect()
+    node.connect()
+
+    try:
+        while elapsed < stress_duration:
+            try:
+                print_w_ts("Checking node")
+                output = node.query(SENSOR_CMD)
+                print_w_ts("ipmi command completed, checking overtemp and no reading")
+                triggered = check_overtemp(sensor_output=output, threshold=95)
+                no_reading = check_no_reading(output)
+                if no_reading:
+                    print_w_ts("No reading was detected, waiting for node to cool down")
+                    r = node.query(FAN_AUTO) # enable Auto mode
+                    time.sleep(60)
+                    continue
+                # One or more sensors reporting overheating, exit loop
+                if triggered:
+                    print_w_ts(f"[!] Overtemperature detected: {triggered}")
+                    logger.log("ERROR", f"Overtemp Detected at sensor {triggered}")
+                    raise KeyboardInterrupt
+                time.sleep(60)
+                elapsed = elapsed + 1
+            # System became unresponsive, power cycle it with a DC reset see how that goes
+            except Exception as e:
+                logger.log("ERROR",f"Exception created, details:\n{e}\nTrying to DC reset the node now")
+                r = rm.query(f"set system off -i {node_pos}")
+                print(f"Trying to set system off node: {node_pos}:\n{r}")
+                time.sleep(10)
+                r = rm.query(f"set system on -i {node_pos}")
+                print(f"Trying to set system on to node {node_pos}:\n{r}")
+                raise e
+
+            time.sleep(2)
+
+    except KeyboardInterrupt:
+        print_w_ts("\n[+] Interrupted task. Node was reset via DC reset")
+    finally:
+        rm.close()
+        node.close()
+        logger.close()
+
+    return 
 
 
 
@@ -388,20 +437,25 @@ def fan_policy_check(logger, node_port, node_pos):
 # =========================
 def main():
     parser = argparse.ArgumentParser(description="SSH Task Runner")
-    parser.add_argument("-t", type=int, choices=[1, 2, 3, 4, 5, 6, 7], required=True, help="Task number")
-    parser.add_argument("-i", type=str, default="127.0.0.1")
-    parser.add_argument("-p", type=int, default=40004)
-    parser.add_argument("-n", type=str, default="4", help="Node number")
-    parser.add_argument("-d", type=float, default=1.0)
+    parser.add_argument("-t", type=int, choices=[1, 2, 3, 4, 5, 6, 7, 8], required=True, help="Task number to be Executed")
+    parser.add_argument("-rmip", type=str, default="127.0.0.1", help="Rack Manager IP")
+    parser.add_argument("-rmp", type=int, default=22, help="Rack manager SSH Port (default 22)")
+    parser.add_argument("-nip", type=str, default="127.0.0.1", help="Host Node IP")
+    parser.add_argument("-npo", type=int, default=22, help="Host Node SSH Port (default 22)")
+    parser.add_argument("-n", type=str, default="4", help="Node position in a Rack Manager")
+    parser.add_argument("-d", type=float, default=1.0, help="Delay Time")
     parser.add_argument("-a", action="store_true")
 
     args = parser.parse_args()
 
     task_id = args.t
-    port = args.p
+    port = args.npo # node port
     delay = args.d
     node = args.n
     ac_cycle = args.a
+    rm_ip = args.rmip # rack manager IP
+    rm_port = args.rmp # rack manager's SSH port
+    node_ip = args.nip # host node IP address
 
     logger = Logger(task_id, node)
 
@@ -419,6 +473,8 @@ def main():
         check_for_events(logger, port, node, delay)
     elif task_id == 7:
         fan_policy_check(logger, port, node)
+    elif task_id == 8:
+        fan_control_algorithm_check(logger, rm_ip, rm_port, node_ip, port, node, delay)
 
 if __name__ == "__main__":
     main()

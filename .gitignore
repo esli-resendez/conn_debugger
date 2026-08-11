@@ -11,3 +11,5 @@ output/plots/*
 traffic_dump/*.log
 traffic_dump/*.txt
 
+output/*
+output/session*
