@@ -380,7 +380,7 @@ def fan_policy_check(logger, node_port, node_pos):
     return
 
 
-def fan_control_algorithm_check(logger, rm_ip, rm_port, node_ip, node_port, node_pos, stress_duration):
+def fan_control_algorithm_check(logger, rm_ip, rm_port, node_ip, node_port, node_pos, stress_duration, stress_interval):
 
     rm = SSHClientWrapper(host=rm_ip, port=rm_port, password="$pl3nd1D", logger=logger)
     node = SSHClientWrapper(host=node_ip, port=node_port, logger=logger)
@@ -407,7 +407,7 @@ def fan_control_algorithm_check(logger, rm_ip, rm_port, node_ip, node_port, node
                     print_w_ts(f"[!] Overtemperature detected: {triggered}")
                     logger.log("ERROR", f"Overtemp Detected at sensor {triggered}")
                     raise KeyboardInterrupt
-                time.sleep(60)
+                time.sleep(stress_interval)
                 elapsed = elapsed + 1
             # System became unresponsive, power cycle it with a DC reset see how that goes
             except Exception as e:
@@ -422,7 +422,7 @@ def fan_control_algorithm_check(logger, rm_ip, rm_port, node_ip, node_port, node
             time.sleep(2)
 
     except KeyboardInterrupt:
-        print_w_ts("\n[+] Interrupted task. Node was reset via DC reset")
+        print_w_ts("\n[+] Interrupted task")
     finally:
         rm.close()
         node.close()
@@ -444,6 +444,7 @@ def main():
     parser.add_argument("-npo", type=int, default=22, help="Host Node SSH Port (default 22)")
     parser.add_argument("-n", type=str, default="4", help="Node position in a Rack Manager")
     parser.add_argument("-d", type=float, default=1.0, help="Delay Time")
+    parser.add_argument("-dst", type=float, default=1.0, help="Dela stress interval Time")
     parser.add_argument("-a", action="store_true")
 
     args = parser.parse_args()
@@ -456,6 +457,7 @@ def main():
     rm_ip = args.rmip # rack manager IP
     rm_port = args.rmp # rack manager's SSH port
     node_ip = args.nip # host node IP address
+    delay_interval = args.dst
 
     logger = Logger(task_id, node)
 
@@ -474,7 +476,7 @@ def main():
     elif task_id == 7:
         fan_policy_check(logger, port, node)
     elif task_id == 8:
-        fan_control_algorithm_check(logger, rm_ip, rm_port, node_ip, port, node, delay)
+        fan_control_algorithm_check(logger, rm_ip, rm_port, node_ip, port, node, delay, delay_interval)
 
 if __name__ == "__main__":
     main()
