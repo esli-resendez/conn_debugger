@@ -444,7 +444,7 @@ def main():
     parser.add_argument("-npo", type=int, default=22, help="Host Node SSH Port (default 22)")
     parser.add_argument("-n", type=str, default="4", help="Node position in a Rack Manager")
     parser.add_argument("-d", type=float, default=1.0, help="Delay Time")
-    parser.add_argument("-dst", type=float, default=1.0, help="Dela stress interval Time")
+    parser.add_argument("-dst", type=float, default=1.0, help="Delay stress interval Time")
     parser.add_argument("-a", action="store_true")
 
     args = parser.parse_args()
