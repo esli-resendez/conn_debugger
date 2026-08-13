@@ -30,6 +30,8 @@ FAN_AUTO = "ipmitool raw 0x32 0x90 0x00"
 FAN_LOW_SPEED = "ipmitool raw 0x32 0x91 0x01 0x10"
 FAN_HIGH_SPEED = "ipmitool raw 0x32 0x91 0x01 0x5F"
 
+PULL_VIA_REDFISH = r"""curl -k -H "Content-Type: application/json" -X GET -u admin:admin "https://127.0.0.1/redfish/v1/Chassis/System/Sensors/?\$expand=." | jq -r '.Members[] | "\(.Name) \(.Reading)"'"""
+
 
 def print_w_ts(text):
     print(f"{datetime.now().strftime("%y/%m/%d %H:%M:%S")}\t{text}")
@@ -380,10 +382,10 @@ def fan_policy_check(logger, node_port, node_pos):
     return
 
 
-def fan_control_algorithm_check(logger, rm_ip, rm_port, node_ip, node_port, node_pos, stress_duration, stress_interval):
+def fan_control_algorithm_check(logger, rm_ip, rm_port, node_ip, node_port, node_pos, stress_duration, stress_interval, node_pw='admin', node_user='admin'):
 
     rm = SSHClientWrapper(host=rm_ip, port=rm_port, password="$pl3nd1D", logger=logger)
-    node = SSHClientWrapper(host=node_ip, port=node_port, logger=logger)
+    node = SSHClientWrapper(host=node_ip, port=node_port, logger=logger, username=node_user, password=node_pw)
     elapsed = 0
 
     rm.connect()
@@ -393,7 +395,7 @@ def fan_control_algorithm_check(logger, rm_ip, rm_port, node_ip, node_port, node
         while elapsed < stress_duration:
             try:
                 print_w_ts("Checking node")
-                output = node.query(SENSOR_CMD)
+                output = node.query(PULL_VIA_REDFISH)
                 print_w_ts("ipmi command completed, checking overtemp and no reading")
                 triggered = check_overtemp(sensor_output=output, threshold=95)
                 no_reading = check_no_reading(output)
