@@ -30,6 +30,29 @@ FAN_AUTO = "ipmitool raw 0x32 0x90 0x00"
 FAN_LOW_SPEED = "ipmitool raw 0x32 0x91 0x01 0x10"
 FAN_HIGH_SPEED = "ipmitool raw 0x32 0x91 0x01 0x5F"
 
+# Commands for rsmcli
+RM_FRU = "show manager fru"
+PSF_FRU = "show powershelf fru"
+TELEMETRY = "show manager telemetry"
+HUM = "show manager hsc -b 0 reading"
+VOLT = "show manager voltage -b 0 status"
+PMR = "show manager powermeter reading"
+HLT_PWR = "show manager health --power"
+C13_5 = "show powershelf c13 reading -c 5"
+
+
+# TASK 8 list
+T9_LIST = [RM_FRU, HUM, VOLT, PMR, PSF_FRU, HLT_PWR, C13_5]
+
+C13_READING_ALL = "show powershelf c13 reading" # all c13 modules
+
+# Powershelf commands
+C1_STAT = [f"show powershelf c13 status -c {x+1}" for x in range(4)]
+C13_READING = [f"show powershelf c13 reading -c {x+1}" for x in range(4)]
+
+# List of commands to check
+
+
 PULL_VIA_REDFISH = r"""curl -k -H "Content-Type: application/json" -X GET -u admin:admin "https://127.0.0.1/redfish/v1/Chassis/System/Sensors/?\$expand=." | jq -r '.Members[] | "\(.Name) \(.Reading)"'"""
 
 
@@ -117,6 +140,8 @@ def power_cycle_node_wait(node:SSHClientWrapper, rm:SSHClientWrapper, logger:Log
 
     return
 
+def check_error_found(output):
+    return "Failure" in output
 
 def check_no_reading(sensor_output):
     return"no reading" in sensor_output
@@ -323,54 +348,40 @@ def cause_overheat_task(logger, node_port, node_pos):
     return
 
 
-def fan_policy_check(logger, node_port, node_pos):
+def fan_policy_check(logger, node_port, node_pos, test_time=300, test_delay=0.5):
 
     rm = SSHClientWrapper(port=40050, password="$pl3nd1D", logger=logger)
     node = SSHClientWrapper(port=node_port, logger=logger)
     fans_manual = False
+    elapsed = 0
 
     rm.connect()
     node.connect()
 
     try:
-        while True:
+        while elapsed < test_time:
             try:
-                print_w_ts("Checking node")
+                print_w_ts("Collecting sensor from node")
                 output = node.query(SENSOR_CMD)
-                print_w_ts("ipmi command completed, checking overtemp and no reading")
+                print_w_ts("ipmi command completed, checking overtemp and no readings")
                 triggered = check_overtemp(sensor_output=output, threshold=85)
-                no_reading = check_no_reading(output)
-                if no_reading:
-                    print_w_ts("No reading was detected, waiting for node to cool down")
-                    r = node.query(FAN_AUTO) # enable Auto mode
-                    time.sleep(60)
-                    continue
-                # system is overheating, return to control
                 if triggered:
-                    print_w_ts(f"[!] Overtemperature detected: {triggered}")
-                    logger.log("ERROR", f"Overtemp Detected at sensor {triggered}")
-                    # shut down the node now via AC cycle
-                    if fans_manual:
-                        r = node.query(FAN_AUTO) # low speed")
-                        print_w_ts("fans now back to Auto mode...")
-                        fans_manual = False
-                else:
-                    if not fans_manual:
-                        print_w_ts("No overtemp, setting fans to slow speed")
-                        r = node.query(FAN_MANUAL)
-                        r = node.query(FAN_LOW_SPEED)
-                        fans_manual = True
+                    print_w_ts('[+++] Overheating found')
+                
+
             # System became unresponsive, power cycle it with a DC reset see how that goes
             except Exception as e:
                 print(f"Exception created, details:\n{e}")
-                r = rm.query(f"set system off -i {node_pos}")
-                print(f"Trying to set system off node: {node_pos}:\n{r}")
-                time.sleep(10)
-                r = rm.query(f"set system on -i {node_pos}")
-                print(f"Trying to set system on to node {node_pos}:\n{r}")
+                #r = rm.query(f"set system off -i {node_pos}")
+                #print(f"Trying to set system off node: {node_pos}:\n{r}")
+                #time.sleep(10)
+                #r = rm.query(f"set system on -i {node_pos}")
+                #print(f"Trying to set system on to node {node_pos}:\n{r}")
                 raise e
+            elapsed = elapsed + 1
+            time.sleep(test_delay)
+        print_w_ts('[*] Completed task')
 
-            time.sleep(2)
 
     except KeyboardInterrupt:
         print("\n[+] Interrupted power cycle task")
@@ -387,6 +398,7 @@ def fan_control_algorithm_check(logger, rm_ip, rm_port, node_ip, node_port, node
     rm = SSHClientWrapper(host=rm_ip, port=rm_port, password="$pl3nd1D", logger=logger)
     node = SSHClientWrapper(host=node_ip, port=node_port, logger=logger, username=node_user, password=node_pw)
     elapsed = 0
+    power_check = 0
 
     rm.connect()
     node.connect()
@@ -396,21 +408,17 @@ def fan_control_algorithm_check(logger, rm_ip, rm_port, node_ip, node_port, node
             try:
                 print_w_ts("Checking node")
                 output = node.query(PULL_VIA_REDFISH)
-                print_w_ts("ipmi command completed, checking overtemp and no reading")
-                triggered = check_overtemp(sensor_output=output, threshold=95)
-                no_reading = check_no_reading(output)
-                if no_reading:
-                    print_w_ts("No reading was detected, waiting for node to cool down")
-                    r = node.query(FAN_AUTO) # enable Auto mode
-                    time.sleep(60)
-                    continue
-                # One or more sensors reporting overheating, exit loop
-                if triggered:
-                    print_w_ts(f"[!] Overtemperature detected: {triggered}")
-                    logger.log("ERROR", f"Overtemp Detected at sensor {triggered}")
+                if output == "":
+                    print_w_ts("[----] No output found, node likely shut down")
                     raise KeyboardInterrupt
                 time.sleep(stress_interval)
                 elapsed = elapsed + 1
+                power_check = power_check + 1
+                if power_check > 5:
+                    print_w_ts("Checking SDR sensors for Power Level")
+                    output = node.query(SENSOR_CMD)
+                    power_check = 0
+
             # System became unresponsive, power cycle it with a DC reset see how that goes
             except Exception as e:
                 logger.log("ERROR",f"Exception created, details:\n{e}\nTrying to DC reset the node now")
@@ -421,10 +429,11 @@ def fan_control_algorithm_check(logger, rm_ip, rm_port, node_ip, node_port, node
                 print(f"Trying to set system on to node {node_pos}:\n{r}")
                 raise e
 
-            time.sleep(2)
+            time.sleep(0.5)
+        print_w_ts("[++] Completed the task without interruptions")
 
     except KeyboardInterrupt:
-        print_w_ts("\n[+] Interrupted task")
+        print_w_ts("[+] Interrupted task... exiting now")
     finally:
         rm.close()
         node.close()
@@ -434,12 +443,67 @@ def fan_control_algorithm_check(logger, rm_ip, rm_port, node_ip, node_port, node
 
 
 
+def check_rscm(logger, rm_ip, rm_port, iterations):
+
+    rm = SSHClientWrapper(host=rm_ip, port=rm_port, password="$pl3nd1D", logger=logger)
+    #node = SSHClientWrapper(host=node_ip, port=node_port, logger=logger, username=node_user, password=node_pw)
+    elapsed = 0
+    e_count = 0
+
+    rm.connect()
+    #node.connect()
+
+    try:
+        while elapsed < iterations:
+            print_w_ts(f"Checking CYCLE: {elapsed+1}")
+            for cmd in T9_LIST:
+                try:
+                    print_w_ts(f"Checking R-SCM Cli - {elapsed} cmd: {cmd}")
+                    output = rm.query(cmd)
+                    if check_error_found(output):
+                        print_w_ts("[----] Error found in command, RM failure")
+                        logger.log("error", f"Error found in command: {cmd}")
+                        e_count = e_count+1
+                        if e_count > 10:
+                            logger.log("error", f"10 or more errors found in the session")
+                            print_w_ts("Error count reached, failing now...") 
+                            raise KeyboardInterrupt
+                    time.sleep(1)
+                    #elapsed = elapsed + 1
+                # System became unresponsive, power cycle it with a DC reset see how that goes
+                except Exception as e:
+                    logger.log("ERROR",f"Exception created, details:\n{e}\n")
+                    raise e
+                time.sleep(0.2)
+            elapsed = elapsed+1
+        print_w_ts("[++] Completed all commands in main task without interruptions")
+        print_w_ts("[+] Start now the commands to read all C13 in parallel")
+        for i in range(iterations):
+            output = rm.query(C13_READING_ALL)
+            output = rm.query(RM_FRU)
+            if check_error_found(output):
+                print_w_ts("[eeee] Error found in command, RM failure")
+                raise KeyboardInterrupt
+
+
+    except KeyboardInterrupt:
+        print_w_ts("[+] Interrupted task... exiting now")
+    finally:
+        rm.close()
+        #node.close()
+        logger.close()
+
+    return 
+
+
+
+
 # =========================
 # MAIN
 # =========================
 def main():
     parser = argparse.ArgumentParser(description="SSH Task Runner")
-    parser.add_argument("-t", type=int, choices=[1, 2, 3, 4, 5, 6, 7, 8], required=True, help="Task number to be Executed")
+    parser.add_argument("-t", type=int, choices=[1, 2, 3, 4, 5, 6, 7, 8, 9], required=True, help="Task number to be Executed")
     parser.add_argument("-rmip", type=str, default="127.0.0.1", help="Rack Manager IP")
     parser.add_argument("-rmp", type=int, default=22, help="Rack manager SSH Port (default 22)")
     parser.add_argument("-nip", type=str, default="127.0.0.1", help="Host Node IP")
@@ -476,9 +540,11 @@ def main():
     elif task_id == 6:
         check_for_events(logger, port, node, delay)
     elif task_id == 7:
-        fan_policy_check(logger, port, node)
+        fan_policy_check(logger, port, node, delay, delay_interval)
     elif task_id == 8:
         fan_control_algorithm_check(logger, rm_ip, rm_port, node_ip, port, node, delay, delay_interval)
+    elif task_id==9:
+        check_rscm(logger, rm_ip, rm_port, delay_interval)
 
 if __name__ == "__main__":
     main()
