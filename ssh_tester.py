@@ -33,6 +33,7 @@ FAN_HIGH_SPEED = "ipmitool raw 0x32 0x91 0x01 0x5F"
 # Commands for rsmcli
 RM_FRU = "show manager fru"
 PSF_FRU = "show powershelf fru"
+C13_FRU = "show powershelf c13 fru"
 TELEMETRY = "show manager telemetry"
 HUM = "show manager hsc -b 0 reading"
 VOLT = "show manager voltage -b 0 status"
@@ -154,6 +155,29 @@ def check_overtemp(sensor_output, threshold=85.0):
         if temp > threshold:
             triggered.append((m.group("name"), temp))
     return triggered
+
+
+def reset_c13_module(rm:SSHClientWrapper, logger:Logger):
+    '''
+        Reset the c13 module powering it OFF, read the i2c bus
+        Power it back on
+        Inputs: takes RM object
+        Output: Returns FALSE if the bus did not recover
+    '''
+    print_w_ts("Resetting the C13 module see if that works")
+    logger.log("RECOVERY", "Reseting C13")
+    rm.query("set powershelf c13 off -c 5")
+    rm.query("show powershelf c13 status")
+    time.sleep(5)
+    rm.query(RM_FRU)
+    time.sleep(5)
+    rm.query(PSF_FRU)
+    time.sleep(5)
+    rm.query(C13_FRU)
+    time.sleep(5)
+    rm.query("set powershelf c13 on -c 5")
+    out = rm.query(RM_FRU)
+    return not("Failure" in out)
 
 # =========================
 # TASK EXECUTION
@@ -449,10 +473,8 @@ def check_rscm(logger, rm_ip, rm_port, iterations):
     #node = SSHClientWrapper(host=node_ip, port=node_port, logger=logger, username=node_user, password=node_pw)
     elapsed = 0
     e_count = 0
-
     rm.connect()
     #node.connect()
-
     try:
         while elapsed < iterations:
             print_w_ts(f"Checking CYCLE: {elapsed+1}")
@@ -466,10 +488,16 @@ def check_rscm(logger, rm_ip, rm_port, iterations):
                         e_count = e_count+1
                         if e_count > 10:
                             logger.log("error", f"10 or more errors found in the session")
-                            print_w_ts("Error count reached, failing now...") 
-                            raise KeyboardInterrupt
-                    time.sleep(1)
-                    #elapsed = elapsed + 1
+                            print_w_ts("Error count reached, attempt a reset in c13 c5 module")
+                            # Attempt to reset the C13 module 
+                            if reset_c13_module(rm, logger):
+                                print_w_ts("recovery successful")
+                            else:
+                                print_w_ts('Recovery unsuccessful, bus still having trouble')
+                                raise KeyboardInterrupt
+                    else:
+                        time.sleep(0.5)
+                        e_count = 0 # This is to count consecutive errors
                 # System became unresponsive, power cycle it with a DC reset see how that goes
                 except Exception as e:
                     logger.log("ERROR",f"Exception created, details:\n{e}\n")
