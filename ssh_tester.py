@@ -49,6 +49,7 @@ C13_READING_ALL = "show powershelf c13 reading" # all c13 modules
 
 # Powershelf commands
 C1_STAT = [f"show powershelf c13 status -c {x+1}" for x in range(4)]
+C13_STATUS_ALL = "show powershelf c13 status"
 C13_READING = [f"show powershelf c13 reading -c {x+1}" for x in range(4)]
 
 # List of commands to check
@@ -178,6 +179,32 @@ def reset_c13_module(rm:SSHClientWrapper, logger:Logger):
     rm.query("set powershelf c13 on -c 5")
     out = rm.query(RM_FRU)
     return not("Failure" in out)
+
+def check_c13_status(rm:SSHClientWrapper):
+    rm.query(C13_STATUS_ALL)
+    rm.query(C13_FRU)
+    rm.query(C13_READING_ALL)
+    return
+
+def test_c13_modules(rm:SSHClientWrapper, logger:Logger):
+
+    # Shut down all C13 modules
+    for i in range(8):
+        rm.query(f"set powershelf c13 off -c {i+1}")
+    
+    check_c13_status(rm)
+    c13_arrangement = [[1,2], [3,4], [5,6], [7,8]]
+
+    for c13 in c13_arrangement:
+        logger.log("TEST_MODULE", f"Shutting ON {c13}")
+        for module in c13:
+            rm.query(f"set powershelf c13 on -c {module}")
+        check_c13_status(rm)
+        for module in c13:
+            rm.query(f"set powershelf c13 off -c {module}")
+        check_c13_status(rm)
+
+    return
 
 # =========================
 # TASK EXECUTION
@@ -467,7 +494,7 @@ def fan_control_algorithm_check(logger, rm_ip, rm_port, node_ip, node_port, node
 
 
 
-def check_rscm(logger, rm_ip, rm_port, iterations):
+def check_rscm(logger, rm_ip, rm_port, iterations, check_c13):
 
     rm = SSHClientWrapper(host=rm_ip, port=rm_port, password="$pl3nd1D", logger=logger)
     #node = SSHClientWrapper(host=node_ip, port=node_port, logger=logger, username=node_user, password=node_pw)
@@ -475,6 +502,11 @@ def check_rscm(logger, rm_ip, rm_port, iterations):
     e_count = 0
     rm.connect()
     #node.connect()
+
+    if check_c13:
+        test_c13_modules(rm, logger)
+        return
+
     try:
         while elapsed < iterations:
             print_w_ts(f"Checking CYCLE: {elapsed+1}")
