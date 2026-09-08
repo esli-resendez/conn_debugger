@@ -40,12 +40,10 @@ VOLT = "show manager voltage -b 0 status"
 PMR = "show manager powermeter reading"
 HLT_PWR = "show manager health --power"
 C13_5 = "show powershelf c13 reading -c 5"
-
-
-# TASK 8 list
-T9_LIST = [RM_FRU, HUM, VOLT, PMR, PSF_FRU, HLT_PWR, C13_5]
-
 C13_READING_ALL = "show powershelf c13 reading" # all c13 modules
+# TASK 8 list
+T9_LIST = [RM_FRU, HUM, VOLT, PSF_FRU, C13_FRU, C13_READING_ALL]
+
 
 # Powershelf commands
 C1_STAT = [f"show powershelf c13 status -c {x+1}" for x in range(4)]
@@ -519,8 +517,8 @@ def check_rscm(logger, rm_ip, rm_port, iterations, check_c13):
                         logger.log("error", f"Error found in command: {cmd}")
                         e_count = e_count+1
                         if e_count > 10:
-                            logger.log("error", f"10 or more errors found in the session")
-                            print_w_ts("Error count reached, attempt a reset in c13 c5 module")
+                            logger.log("error", f"10 or more consecutive errors found")
+                            print_w_ts("Consecutive error count reached, attempt a reset in c13 c5 module")
                             # Attempt to reset the C13 module 
                             if reset_c13_module(rm, logger):
                                 print_w_ts("recovery successful")
@@ -528,7 +526,7 @@ def check_rscm(logger, rm_ip, rm_port, iterations, check_c13):
                                 print_w_ts('Recovery unsuccessful, bus still having trouble')
                                 raise KeyboardInterrupt
                     else:
-                        time.sleep(0.5)
+                        time.sleep(0.2)
                         e_count = 0 # This is to count consecutive errors
                 # System became unresponsive, power cycle it with a DC reset see how that goes
                 except Exception as e:
@@ -537,14 +535,6 @@ def check_rscm(logger, rm_ip, rm_port, iterations, check_c13):
                 time.sleep(0.2)
             elapsed = elapsed+1
         print_w_ts("[++] Completed all commands in main task without interruptions")
-        print_w_ts("[+] Start now the commands to read all C13 in parallel")
-        for i in range(iterations):
-            output = rm.query(C13_READING_ALL)
-            output = rm.query(RM_FRU)
-            if check_error_found(output):
-                print_w_ts("[eeee] Error found in command, RM failure")
-                raise KeyboardInterrupt
-
 
     except KeyboardInterrupt:
         print_w_ts("[+] Interrupted task... exiting now")
