@@ -179,27 +179,37 @@ def reset_c13_module(rm:SSHClientWrapper, logger:Logger):
     return not("Failure" in out)
 
 def check_c13_status(rm:SSHClientWrapper):
-    rm.query(C13_STATUS_ALL)
-    rm.query(C13_FRU)
-    rm.query(C13_READING_ALL)
+    s = rm.query(C13_STATUS_ALL)
+    print_w_ts(f"Status:\n{s}")
+    fru = rm.query(C13_FRU)
+    print_w_ts(f"FRU Content:\n{fru}")
+    r = rm.query(C13_READING_ALL)
+    print_w_ts(f"Reading\n{r}")
+    print_w_ts("Completed checking PSHELF Status")
     return
 
 def test_c13_modules(rm:SSHClientWrapper, logger:Logger):
 
     # Shut down all C13 modules
     for i in range(8):
+        print_w_ts(f"Turn off {i+1}")
         rm.query(f"set powershelf c13 off -c {i+1}")
     
     check_c13_status(rm)
-    c13_arrangement = [[1,2], [3,4], [5,6], [7,8]]
+    c13_arrangement = [[1,2, 3,4], [5,6, 7,8]]
 
     for c13 in c13_arrangement:
-        logger.log("TEST_MODULE", f"Shutting ON {c13}")
+        logger.log("TEST_MODULE", f"Turning ON {c13}")
+        print_w_ts(f"Turning on modules {c13}")
         for module in c13:
             rm.query(f"set powershelf c13 on -c {module}")
+        print_w_ts("Waiting for 2 min for C13 to Init...")
+        time.sleep(120)
         check_c13_status(rm)
+        logger.log("TEST_MODULE", f"Turning OFF modules {c13}")
         for module in c13:
             rm.query(f"set powershelf c13 off -c {module}")
+        print_w_ts(f"Turn off modules {c13}")
         check_c13_status(rm)
 
     return
@@ -594,7 +604,7 @@ def main():
     elif task_id == 8:
         fan_control_algorithm_check(logger, rm_ip, rm_port, node_ip, port, node, delay, delay_interval)
     elif task_id==9:
-        check_rscm(logger, rm_ip, rm_port, delay_interval)
+        check_rscm(logger, rm_ip, rm_port, delay_interval, ac_cycle)
 
 if __name__ == "__main__":
     main()
