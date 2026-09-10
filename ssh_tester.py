@@ -41,15 +41,16 @@ PMR = "show manager powermeter reading"
 HLT_PWR = "show manager health --power"
 C13_5 = "show powershelf c13 reading -c 5"
 C13_READING_ALL = "show powershelf c13 reading" # all c13 modules
+C13_FRU_IND = ["show powershelf c13 fru -i {x}" for x in range(1,5)]
 # TASK 9 list
-T9_LIST = [RM_FRU, HUM, VOLT, PSF_FRU, C13_FRU, C13_READING_ALL]
+T9_LIST = [RM_FRU, HUM, VOLT, PSF_FRU] + C13_FRU_IND
 
 # show versions
 RM_VER = "show manager version"
 SUP_VER = "show powershelf psu version"
 
 # Powershelf commands
-C1_STAT = [f"show powershelf c13 status -c {x+1}" for x in range(4)]
+C13_STAT = [f"show powershelf c13 status -c {x+1}" for x in range(4)]
 C13_STATUS_ALL = "show powershelf c13 status"
 C13_READING = [f"show powershelf c13 reading -c {x+1}" for x in range(4)]
 
