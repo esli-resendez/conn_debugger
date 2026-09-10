@@ -41,9 +41,12 @@ PMR = "show manager powermeter reading"
 HLT_PWR = "show manager health --power"
 C13_5 = "show powershelf c13 reading -c 5"
 C13_READING_ALL = "show powershelf c13 reading" # all c13 modules
-# TASK 8 list
+# TASK 9 list
 T9_LIST = [RM_FRU, HUM, VOLT, PSF_FRU, C13_FRU, C13_READING_ALL]
 
+# show versions
+RM_VER = "show manager version"
+SUP_VER = "show powershelf psu version"
 
 # Powershelf commands
 C1_STAT = [f"show powershelf c13 status -c {x+1}" for x in range(4)]
@@ -213,6 +216,42 @@ def test_c13_modules(rm:SSHClientWrapper, logger:Logger):
         check_c13_status(rm)
 
     return
+
+
+def find_psu_fw_mismatches(output_str: str, expected_version: str) -> list[int]:
+    """
+    Parse PSU firmware output and return a list of socket numbers whose
+    ImageA Version does not match the expected version.
+
+    """
+
+    mismatches = []
+    # Match each psu socket block (01:, 02:, ..., 12:)
+    pattern = re.compile(
+        r'^\s*(\d{2}):\s*\n(.*?)(?=^\s*\d{2}:|\Z)',
+        re.MULTILINE | re.DOTALL
+    )
+
+    for match in pattern.finditer(output_str):
+        socket_num = int(match.group(1))
+        block = match.group(2)
+
+        # Ignore PSU not present
+        if "Status Description: PSU not present" in block:
+            print_w_ts(f"Ignoring Block: {block} since is not present")
+            continue
+        # Extract ImageA Version
+        version_match = re.search(
+            r'ImageA Version:\s*([0-9A-Fa-f]+)',
+            block
+        )
+        if version_match:
+            actual_version = version_match.group(1)
+            if actual_version.upper() != expected_version.upper():
+                print_w_ts(f"Found {block} FW mismatch")
+                mismatches.append(socket_num)
+
+    return mismatches
 
 # =========================
 # TASK EXECUTION
@@ -511,6 +550,14 @@ def check_rscm(logger, rm_ip, rm_port, iterations, check_c13):
     rm.connect()
     #node.connect()
 
+    print_w_ts("Display version and FRU")
+    v = rm.query(RM_VER)
+    fru = rm.query(RM_FRU)
+    ps = rm.query(SUP_VER)
+
+    print_w_ts(f"System:\n{fru}\nVersion:\n{v}")
+
+    # single read of fw ver and abort if not working
     if check_c13:
         test_c13_modules(rm, logger)
         return
@@ -538,7 +585,7 @@ def check_rscm(logger, rm_ip, rm_port, iterations, check_c13):
                     else:
                         time.sleep(0.2)
                         e_count = 0 # This is to count consecutive errors
-                # System became unresponsive, power cycle it with a DC reset see how that goes
+                # Handle exception to close the log file
                 except Exception as e:
                     logger.log("ERROR",f"Exception created, details:\n{e}\n")
                     raise e
@@ -553,7 +600,41 @@ def check_rscm(logger, rm_ip, rm_port, iterations, check_c13):
         #node.close()
         logger.close()
 
-    return 
+    return
+
+
+def rscm_psu_fw_upgrade(logger, rm_ip, rm_port, expected_ver):
+
+    timeout = 100
+    rm = SSHClientWrapper(host=rm_ip, port=rm_port, password="$pl3nd1D", logger=logger)
+    rm.connect()
+    psu_status = rm.query(SUP_VER)
+    upgradeable_psu = find_psu_fw_mismatches(psu_status, expected_ver)
+    
+    # Upgrade one by one the upgradeable PSUs
+    
+    for psu in upgradeable_psu:
+        # Report current version
+        print_w_ts(rm.query(f"show powershelf psu version -s {psu}"))
+        print_w_ts("f[++] Will try to upgrade now PSU: {psu}")
+        r= rm.query(f"set powershelf psu update -s {psu} -f Flex_M1279207-001_P4020_V000F0E00.hex")
+        # check if cmd went ok
+        if "PSU firmware update started" in r:
+            for i in range(timeout):
+                status = rm.query(f"show powershelf psu update -s {psu}")
+                print_w_ts(f"PSU update status:\n{status}\n")
+                if "Update completed" in status:
+                    print_w_ts("Done, moving to next")
+                    break
+                else:
+                    print_w_ts("Waiting 60 sec")
+                    time.sleep(60)
+
+    print_w_ts("All PSU upgraded")
+    psu_status = rm.query(SUP_VER)
+    print_w_ts(psu_status)
+
+    return
 
 
 
@@ -563,7 +644,7 @@ def check_rscm(logger, rm_ip, rm_port, iterations, check_c13):
 # =========================
 def main():
     parser = argparse.ArgumentParser(description="SSH Task Runner")
-    parser.add_argument("-t", type=int, choices=[1, 2, 3, 4, 5, 6, 7, 8, 9], required=True, help="Task number to be Executed")
+    parser.add_argument("-t", type=int, choices=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10], required=True, help="Task number to be Executed")
     parser.add_argument("-rmip", type=str, default="127.0.0.1", help="Rack Manager IP")
     parser.add_argument("-rmp", type=int, default=22, help="Rack manager SSH Port (default 22)")
     parser.add_argument("-nip", type=str, default="127.0.0.1", help="Host Node IP")
@@ -605,6 +686,8 @@ def main():
         fan_control_algorithm_check(logger, rm_ip, rm_port, node_ip, port, node, delay, delay_interval)
     elif task_id==9:
         check_rscm(logger, rm_ip, rm_port, delay_interval, ac_cycle)
+    elif task_id==10:
+        rscm_psu_fw_upgrade(logger, rm_ip, rm_port, node)
 
 if __name__ == "__main__":
     main()
